@@ -1,4 +1,4 @@
-name: Build QDL
+name: Build QDL (Linux)
 
 on:
   push:
@@ -40,104 +40,23 @@ jobs:
           name: qdl-linux
           path: qdl-linux.tar.gz
 
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          brew install libxml2 libusb libzip meson ninja help2man
-
-      - name: Build
-        run: |
-          meson setup build
-          meson compile -C build
-
-      - name: Run tests
-        run: meson test -C build
-
-      - name: Package
-        run: |
-          mkdir -p qdl-macos
-          cp build/qdl qdl-macos/
-          cp build/qdl.1 qdl-macos/ 2>/dev/null || true
-          tar czf qdl-macos.tar.gz qdl-macos/
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: qdl-macos
-          path: qdl-macos.tar.gz
-
-  build-windows:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            base-devel
-            git
-            help2man
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-meson
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-libusb
-            mingw-w64-x86_64-libxml2
-            mingw-w64-x86_64-libzip
-
-      - name: Build
-        run: |
-          meson setup build
-          meson compile -C build
-
-      - name: Run tests
-        run: meson test -C build
-
-      - name: Package
-        run: |
-          mkdir -p qdl-windows
-          cp build/qdl.exe qdl-windows/
-          cp build/qdl.1 qdl-windows/ 2>/dev/null || true
-          # Copy required DLLs
-          ldd build/qdl.exe | grep mingw64 | awk '{print $3}' | while read dll; do
-            cp "$dll" qdl-windows/ 2>/dev/null || true
-          done
-          7z a qdl-windows.zip qdl-windows/
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: qdl-windows
-          path: qdl-windows.zip
-
   release:
-    needs: [build-linux, build-macos, build-windows]
+    needs: build-linux
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     steps:
-      - name: Download all artifacts
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
+          name: qdl-linux
           path: artifacts
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/qdl-linux/qdl-linux.tar.gz
-            artifacts/qdl-macos/qdl-macos.tar.gz
-            artifacts/qdl-windows/qdl-windows.zip
+          files: artifacts/qdl-linux.tar.gz
           draft: false
           prerelease: false
         env:
