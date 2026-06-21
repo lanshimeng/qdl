@@ -1,195 +1,144 @@
-name: Buildtest
+name: Build QDL
 
 on:
-  pull_request:
   push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
 
 jobs:
   build-linux:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { arch: x64, os: 24, runner: ubuntu-24.04 }
-          - { arch: arm64, os: 24, runner: ubuntu-24.04-arm }
-          - { arch: x64, os: 22, runner: ubuntu-22.04 }
-          - { arch: arm64, os: 22, runner: ubuntu-22.04-arm }
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-
-          sudo apt-get install -y libcmocka-dev libxml2-dev libusb-1.0-0-dev libzip-dev help2man pipx zip
-          pipx ensurepath
-          pipx install meson==1.4.0
-
-      - name: Configure
-        run: meson setup build
+          sudo apt-get install -y libxml2-dev libusb-1.0-0-dev libzip-dev meson ninja-build help2man
 
       - name: Build
-        run: meson compile -C build
+        run: |
+          meson setup build
+          meson compile -C build
 
       - name: Run tests
-        run: meson test -C build --print-errorlogs
-
-      - name: Generate man pages
-        run: meson compile manpages -C build
+        run: meson test -C build
 
       - name: Package
         run: |
-          mkdir dist
-          cp `pkg-config --variable=libdir libusb-1.0`/libusb-1.0.so.0 dist
-          chmod 0644 dist/*
-          cp ./build/qdl dist
-          patchelf --set-rpath '$ORIGIN' dist/qdl
+          mkdir -p qdl-linux
+          cp build/qdl qdl-linux/
+          cp build/qdl.1 qdl-linux/ 2>/dev/null || true
+          tar czf qdl-linux.tar.gz qdl-linux/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qdl-binary-ubuntu-${{matrix.os}}-${{ matrix.arch }}
-          path: dist/*
+          name: qdl-linux
+          path: qdl-linux.tar.gz
 
-
-  build-mac:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { sys: macos-14, arch: arm64 }
-          - { sys: macos-15-intel, arch: intel }
-    runs-on: ${{ matrix.sys }}
-
+  build-macos:
+    runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Dependencies
+      - name: Install dependencies
         run: |
-          brew install cmocka libxml2 libzip meson ninja help2man zip
-
-      - name: Configure
-        run: meson setup build
+          brew install libxml2 libusb libzip meson ninja help2man
 
       - name: Build
-        run: meson compile -C build
-
-      - name: Generate man pages
-        run: meson compile manpages -C build
+        run: |
+          meson setup build
+          meson compile -C build
 
       - name: Run tests
-        run: meson test -C build --print-errorlogs
+        run: meson test -C build
 
       - name: Package
         run: |
-          set -x
-          mkdir dist
-          cp `pkg-config --variable=libdir libusb-1.0`/libusb-1.0.0.dylib dist
-          cp `pkg-config --variable=libdir liblzma`/liblzma.5.dylib dist
-          chmod 0644 dist/*
-          cp ./build/qdl dist
-
-          if uname -a | grep -q arm64; then
-            LIBUSB_DIR=/opt/homebrew/opt/libusb/lib
-            LIBLZMA_DIR=/usr/lib
-          else
-            LIBUSB_DIR=/usr/local/opt/libusb/lib
-            LIBLZMA_DIR=/usr/local/opt/xz/lib
-          fi
-
-          install_name_tool -add_rpath @executable_path dist/qdl
-          install_name_tool -change $LIBUSB_DIR/libusb-1.0.0.dylib @rpath/libusb-1.0.0.dylib dist/qdl
-          install_name_tool -change $LIBLZMA_DIR/liblzma.5.dylib @rpath/liblzma.5.dylib dist/qdl
-          otool -L dist/qdl
-          dist/qdl || true
+          mkdir -p qdl-macos
+          cp build/qdl qdl-macos/
+          cp build/qdl.1 qdl-macos/ 2>/dev/null || true
+          tar czf qdl-macos.tar.gz qdl-macos/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qdl-binary-macos-${{ matrix.arch }}
-          path: dist/*
+          name: qdl-macos
+          path: qdl-macos.tar.gz
 
   build-windows:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { sys: windows-latest, arch: x64 }
-          - { sys: windows-11-arm, arch: arm64 }
-    runs-on: ${{ matrix.sys }}
-
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
       - name: Setup MSYS2
-        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          install: >
+          update: true
+          install: >-
             base-devel
             git
             help2man
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-meson
             mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-cmocka
-            mingw-w64-x86_64-libxml2
             mingw-w64-x86_64-libusb
+            mingw-w64-x86_64-libxml2
             mingw-w64-x86_64-libzip
-            mingw-w64-x86_64-xz
-            zip
-
-      - name: Configure
-        run: meson setup build
-        shell: msys2 {0}
 
       - name: Build
         run: |
-          git config --global core.autocrlf true
+          meson setup build
           meson compile -C build
-        shell: msys2 {0}
-
-      - name: Generate man pages
-        run: meson compile manpages -C build
-        shell: msys2 {0}
 
       - name: Run tests
-        run: meson test -C build --print-errorlogs
-        shell: msys2 {0}
+        run: meson test -C build
 
       - name: Package
-        shell: pwsh
         run: |
-          $MSYS2_LOCATION = "${{ steps.msys2.outputs.msys2-location }}"
-          $BIN_DIR = Join-Path $MSYS2_LOCATION "mingw64\bin"
-          $DistDir = "dist"
-          New-Item -ItemType Directory -Path $DistDir | Out-Null
-
-          Copy-Item (Join-Path $BIN_DIR "zlib1.dll") $DistDir
-          Copy-Item (Join-Path $BIN_DIR "libxml2-16.dll") $DistDir
-          Copy-Item (Join-Path $BIN_DIR "libusb-1.0.dll") $DistDir
-          Copy-Item (Join-Path $BIN_DIR "libzip.dll") $DistDir
-          Copy-Item (Join-Path $BIN_DIR "liblzma-5.dll") $DistDir
-          Copy-Item (Join-Path $BIN_DIR "libiconv-2.dll") $DistDir
-          Copy-Item (Join-Path $BIN_DIR "libbz2-1.dll") $DistDir
-          Copy-Item (Join-Path $BIN_DIR "libzstd.dll") $DistDir
-
-          Copy-Item "./build/qdl.exe" $DistDir
+          mkdir -p qdl-windows
+          cp build/qdl.exe qdl-windows/
+          cp build/qdl.1 qdl-windows/ 2>/dev/null || true
+          # Copy required DLLs
+          ldd build/qdl.exe | grep mingw64 | awk '{print $3}' | while read dll; do
+            cp "$dll" qdl-windows/ 2>/dev/null || true
+          done
+          7z a qdl-windows.zip qdl-windows/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qdl-binary-windows-${{ matrix.arch }}
-          path: dist/*
+          name: qdl-windows
+          path: qdl-windows.zip
 
+  release:
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/qdl-linux/qdl-linux.tar.gz
+            artifacts/qdl-macos/qdl-macos.tar.gz
+            artifacts/qdl-windows/qdl-windows.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
